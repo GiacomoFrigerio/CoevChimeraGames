@@ -1,0 +1,290 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+# ==========================================================
+# GLOBAL CONSTANTS
+# ==========================================================
+lambda_val = 1  # Exponent in the feedback nonlinearity
+
+
+# ==========================================================
+# FIXED-POINT EQUATION AND DERIVATIVE
+# ==========================================================
+def equation(rho, Dg, Dr, Dg_arrival, Dr_arrival):
+    """
+    Fixed-point equation f(ρ; Dg, Dr) = 0 for the interior equilibrium ρ* of the
+    replicator dynamics with endogenous feedback.
+
+    Parameters
+    ----------
+    rho : float or np.ndarray
+        Cooperation level candidate(s) in [0, 1].
+    Dg : float
+        Initial dilemma strength in the "g" direction (e.g. temptation/greed).
+    Dr : float
+        Initial dilemma strength in the "r" direction (e.g. risk/reward).
+    Dg_arrival : float
+        Target value of Dg when ρ = 1 (arrival game).
+    Dr_arrival : float
+        Target value of Dr when ρ = 1 (arrival game).
+
+    Returns
+    -------
+    float or np.ndarray
+        Value of f(ρ; Dg, Dr). Zeros of this function in [0, 1] are candidate equilibria.
+    """
+    return (
+        rho**(lambda_val + 1) * (Dg - Dr + Dr_arrival - Dg_arrival)
+        + rho**lambda_val * (Dr - Dr_arrival)
+        + rho * (Dr - Dg)
+        - Dr
+    )
+
+
+def derivative(rho, Dg, Dr, Dg_arrival, Dr_arrival):
+    """
+    Derivative df/dρ of the fixed-point equation, used to determine stability.
+
+    A fixed point ρ* is:
+        - stable if derivative(ρ*) < 0
+        - unstable if derivative(ρ*) > 0
+    """
+    term1 = (lambda_val + 1) * rho**lambda_val * (Dg - Dr + Dr_arrival - Dg_arrival)
+    term2 = lambda_val * rho**(lambda_val - 1) * (Dr - Dr_arrival)
+    term3 = (Dr - Dg)
+    return term1 + term2 + term3
+
+
+# ==========================================================
+# ROOT FINDER ON [0, 1]
+# ==========================================================
+def find_roots(Dg, Dr, Dg_arrival, Dr_arrival, rho_grid=None):
+    """
+    Find up to two roots of f(ρ; Dg, Dr) = 0 in the interval [0, 1],
+    using a simple sign-change + linear interpolation approach on a dense grid.
+
+    Parameters
+    ----------
+    Dg, Dr : float
+        Initial game parameters.
+    Dg_arrival, Dr_arrival : float
+        Arrival game parameters.
+    rho_grid : np.ndarray, optional
+        Grid of ρ values in [0,1] on which to search for sign changes.
+        If None, a default grid of 1000 points is used.
+
+    Returns
+    -------
+    list of float
+        Sorted list of roots in [0,1]. At most two are returned.
+        (The equations are at most quadratic in ρ for λ=1.)
+    """
+    if rho_grid is None:
+        rho_grid = np.linspace(0, 1, 1000)
+
+    f_vals = equation(rho_grid, Dg, Dr, Dg_arrival, Dr_arrival)
+    roots = []
+
+    # Scan for sign changes between adjacent grid points
+    for k in range(len(rho_grid) - 1):
+        if f_vals[k] * f_vals[k + 1] < 0:
+            # Linear interpolation to approximate the root
+            r = rho_grid[k] - f_vals[k] * (rho_grid[k + 1] - rho_grid[k]) / (f_vals[k + 1] - f_vals[k])
+            roots.append(r)
+
+    # Keep only roots within [0,1]
+    roots = sorted([r for r in roots if 0 <= r <= 1])
+
+    # For most parameter choices, there are 0, 1, or 2 roots
+    return roots[:2]
+
+
+# ==========================================================
+# 1. ROOT AND STABILITY MAPS FOR ALL (Dg_arrival, Dr_arrival) COMBINATIONS
+# ==========================================================
+Dg_arrival_list = [-1, 1]
+Dr_arrival_list = [-1, 1]
+
+for Dg_arrival in Dg_arrival_list:
+    for Dr_arrival in Dr_arrival_list:
+        print(f"=== ROOT/STABILITY MAPS: Dg_arrival={Dg_arrival}, Dr_arrival={Dr_arrival} ===")
+
+        # Parameter grid in (Dg, Dr)-space
+        Dg_vals = np.linspace(-1, 1, 200)
+        Dr_vals = np.linspace(-1, 1, 200)
+        D_G, D_R = np.meshgrid(Dg_vals, Dr_vals)
+
+        # Arrays to store:
+        # - Smaller / larger root
+        # - Their stability (1 = stable, 0 = unstable, NaN = no root)
+        RHO_LESSER = np.full_like(D_G, np.nan, dtype=float)
+        RHO_LARGER = np.full_like(D_G, np.nan, dtype=float)
+        STABLE_LESSER = np.full_like(D_G, np.nan, dtype=float)
+        STABLE_LARGER = np.full_like(D_G, np.nan, dtype=float)
+
+        # Compute roots and stability across the grid
+        for i in range(D_G.shape[0]):
+            for j in range(D_G.shape[1]):
+                Dg = D_G[i, j]
+                Dr = D_R[i, j]
+
+                roots = find_roots(Dg, Dr, Dg_arrival, Dr_arrival)
+                # Pad roots list to length 2 with NaN
+                r1 = roots[0] if len(roots) > 0 else np.nan
+                r2 = roots[1] if len(roots) > 1 else np.nan
+
+                RHO_LESSER[i, j] = r1
+                RHO_LARGER[i, j] = r2
+
+                if not np.isnan(r1):
+                    STABLE_LESSER[i, j] = 1 if derivative(r1, Dg, Dr, Dg_arrival, Dr_arrival) < 0 else 0
+                if not np.isnan(r2):
+                    STABLE_LARGER[i, j] = 1 if derivative(r2, Dg, Dr, Dg_arrival, Dr_arrival) < 0 else 0
+
+        # Plot: roots and stability
+        fig, axes = plt.subplots(2, 2, figsize=(14, 12))
+        fig.suptitle(f"Roots and stability — Dg_arrival={Dg_arrival}, Dr_arrival={Dr_arrival}", fontsize=16)
+
+        # Heatmap of smaller root
+        im0 = axes[0, 0].imshow(
+            RHO_LESSER,
+            extent=[-1, 1, -1, 1],
+            origin='lower',
+            aspect='auto',
+            cmap='viridis'
+        )
+        axes[0, 0].set_title('Smaller root ρ(Dg, Dr)')
+        axes[0, 0].set_xlabel('D_g')
+        axes[0, 0].set_ylabel('D_r')
+        fig.colorbar(im0, ax=axes[0, 0])
+
+        # Heatmap of larger root
+        im1 = axes[0, 1].imshow(
+            RHO_LARGER,
+            extent=[-1, 1, -1, 1],
+            origin='lower',
+            aspect='auto',
+            cmap='viridis'
+        )
+        axes[0, 1].set_title('Larger root ρ(Dg, Dr)')
+        axes[0, 1].set_xlabel('D_g')
+        axes[0, 1].set_ylabel('D_r')
+        fig.colorbar(im1, ax=axes[0, 1])
+
+        # Stability maps (0 = unstable, 1 = stable)
+        levels = [-0.5, 0.5, 1.5]  # boundaries between 0 and 1
+        cmap_stab = plt.cm.Reds
+
+        cf0 = axes[1, 0].contourf(D_G, D_R, STABLE_LESSER, levels=levels, cmap=cmap_stab)
+        axes[1, 0].set_title('Stability of smaller root')
+        axes[1, 0].set_xlabel('D_g')
+        axes[1, 0].set_ylabel('D_r')
+        fig.colorbar(cf0, ax=axes[1, 0], ticks=[0, 1], label='Stable = 1')
+
+        cf1 = axes[1, 1].contourf(D_G, D_R, STABLE_LARGER, levels=levels, cmap=cmap_stab)
+        axes[1, 1].set_title('Stability of larger root')
+        axes[1, 1].set_xlabel('D_g')
+        axes[1, 1].set_ylabel('D_r')
+        fig.colorbar(cf1, ax=axes[1, 1], ticks=[0, 1], label='Stable = 1')
+
+        plt.tight_layout()
+        plt.show()
+
+# ==========================================================
+# 2. NUMBER OF SOLUTIONS MAP + REPRESENTATIVE PHASE-LINE PLOTS
+# ==========================================================
+for Dg_arrival in Dg_arrival_list:
+    for Dr_arrival in Dr_arrival_list:
+        print(f"=== NUMBER OF ROOTS + PHASE-LINES: Dg_arrival={Dg_arrival}, Dr_arrival={Dr_arrival} ===")
+
+        # Grid over (Dg, Dr)
+        Dg_vals_grid = np.linspace(-1, 1, 200)
+        Dr_vals_grid = np.linspace(-1, 1, 200)
+        D_G, D_R = np.meshgrid(Dg_vals_grid, Dr_vals_grid)
+        NUM_SOLUTIONS = np.zeros_like(D_G, dtype=int)
+
+        # Count how many roots in [0,1] each (Dg,Dr) has
+        for i in range(D_G.shape[0]):
+            for j in range(D_G.shape[1]):
+                roots = find_roots(D_G[i, j], D_R[i, j], Dg_arrival, Dr_arrival)
+                NUM_SOLUTIONS[i, j] = len(roots)
+
+        # Plot: number of solutions per grid point
+        levels = [-0.5, 0.5, 1.5, 2.5]  # 0,1,2 solutions
+        colors = ['red', 'yellow', 'green']
+
+        plt.figure(figsize=(7, 6))
+        cf = plt.contourf(D_G, D_R, NUM_SOLUTIONS, levels=levels, colors=colors)
+        cbar = plt.colorbar(cf, ticks=[0, 1, 2])
+        cbar.set_label('Number of solutions')
+        plt.xlabel('D_g')
+        plt.ylabel('D_r')
+        plt.title(f'Number of roots per grid point\nDg_arrival={Dg_arrival}, Dr_arrival={Dr_arrival}')
+        plt.show()
+
+        # Pick one representative point for each region: 0, 1, or 2 solutions
+        rep_points = []
+        for n_sol in [0, 1, 2]:
+            indices = np.argwhere(NUM_SOLUTIONS == n_sol)
+            if len(indices) > 0:
+                idx = indices[np.random.randint(len(indices))]
+                Dg = D_G[idx[0], idx[1]]
+                Dr = D_R[idx[0], idx[1]]
+                rep_points.append({'Dg': Dg, 'Dr': Dr, 'n_sol': n_sol})
+
+        # Plot phase-line diagrams for these representative points
+        if len(rep_points) > 0:
+            fig, axes = plt.subplots(1, len(rep_points), figsize=(4 * len(rep_points), 5))
+            if len(rep_points) == 1:
+                axes = [axes]
+
+            rho_plot = np.linspace(0, 1, 500)
+
+            for ax, pt in zip(axes, rep_points):
+                Dg, Dr, n_sol = pt['Dg'], pt['Dr'], pt['n_sol']
+                roots = find_roots(Dg, Dr, Dg_arrival, Dr_arrival)
+                f_vals = equation(rho_plot, Dg, Dr, Dg_arrival, Dr_arrival)
+
+                # Plot f(ρ)
+                ax.plot(rho_plot, f_vals, color='black', lw=1.5)
+                ax.axhline(0, color='gray', lw=1, ls='--')
+                ax.set_xlim(0, 1)
+                ax.set_ylim(-2 * np.max(np.abs(f_vals)), 2 * np.max(np.abs(f_vals)))
+                ax.set_yticks([])
+                ax.set_xlabel('ρ')
+                ax.set_title(f"{n_sol} solution(s)\nDg={Dg:.2f}, Dr={Dr:.2f}\n"
+                             f"Dg_arrival={Dg_arrival}, Dr_arrival={Dr_arrival}")
+
+                # Phase-line arrows
+                if len(roots) == 0:
+                    # No fixed points: sign of f(ρ) is same on (0,1)
+                    mid_val = equation(0.5, Dg, Dr, Dg_arrival, Dr_arrival)
+                    if mid_val > 0:
+                        # f(ρ) > 0 ⇒ ρ increases
+                        ax.annotate('', xy=(1, 0), xytext=(0, 0),
+                                    arrowprops=dict(arrowstyle='->', color='blue', lw=2))
+                    else:
+                        # f(ρ) < 0 ⇒ ρ decreases
+                        ax.annotate('', xy=(0, 0), xytext=(1, 0),
+                                    arrowprops=dict(arrowstyle='->', color='blue', lw=2))
+                else:
+                    # Mark fixed points and their stability
+                    for r in roots:
+                        ax.plot(r, 0, 'ko', markersize=8)
+                        deriv = derivative(r, Dg, Dr, Dg_arrival, Dr_arrival)
+                        arrow_length = 0.1
+                        if deriv < 0:
+                            # Stable: arrows pointing towards r
+                            ax.annotate('', xy=(r, 0), xytext=(r - arrow_length, 0),
+                                        arrowprops=dict(arrowstyle='->', color='green', lw=2))
+                            ax.annotate('', xy=(r, 0), xytext=(r + arrow_length, 0),
+                                        arrowprops=dict(arrowstyle='->', color='green', lw=2))
+                        else:
+                            # Unstable: arrows pointing away from r
+                            ax.annotate('', xy=(r - arrow_length, 0), xytext=(r, 0),
+                                        arrowprops=dict(arrowstyle='->', color='red', lw=2))
+                            ax.annotate('', xy=(r + arrow_length, 0), xytext=(r, 0),
+                                        arrowprops=dict(arrowstyle='->', color='red', lw=2))
+
+            plt.tight_layout()
+            plt.show()
